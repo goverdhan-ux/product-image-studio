@@ -44,6 +44,8 @@ function getDimensions(aspectRatio: string, quality: string): { width: number; h
   return { width: w, height: h };
 }
 
+export const maxDuration = 300;
+
 export async function POST(request: NextRequest) {
   try {
     const ip = request.headers.get("x-forwarded-for") || "unknown";
