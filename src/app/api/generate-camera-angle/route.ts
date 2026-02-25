@@ -89,7 +89,7 @@ export async function POST(request: NextRequest) {
     const fullPrompt = `${anglePrompt} ${customPrompt}`.trim() || anglePrompt;
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -101,8 +101,9 @@ export async function POST(request: NextRequest) {
             ]
           }],
           generationConfig: {
-            responseModalities: ["TEXT", "IMAGE"],
-            imageConfig: { imageSize: `${dims.width}x${dims.height}` }
+            responseModalities: "IMAGE",
+            temperature: 0.9,
+            topP: 0.95
           }
         })
       }

@@ -101,9 +101,9 @@ export async function POST(request: NextRequest) {
     // Get dimensions based on aspect ratio and quality
     const dims = getDimensions(aspectRatio, quality);
 
-    // Use REST API directly for image generation
+    // Use faster gemini-2.5-flash model
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: {
@@ -119,10 +119,9 @@ export async function POST(request: NextRequest) {
             }
           ],
           generationConfig: {
-            responseModalities: ["TEXT", "IMAGE"],
-            imageConfig: {
-              imageSize: `${dims.width}x${dims.height}`
-            }
+            responseModalities: "IMAGE",
+            temperature: 0.9,
+            topP: 0.95
           }
         })
       }
