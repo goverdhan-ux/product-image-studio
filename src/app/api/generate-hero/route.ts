@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { spawn } from "child_process";
-import path from "path";
-import { writeFile, unlink, readFile } from "fs/promises";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { writeFile, unlink } from "fs/promises";
 import { v4 as uuidv4 } from "uuid";
+import { readFileSync, unlinkSync, existsSync } from "fs";
 
-// Simple in-memory rate limiter
+// Rate limiter
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 const RPM = 20;
-const WINDOW_MS = 60000; // 1 minute
+const WINDOW_MS = 60000;
 
-function checkRateLimit(identifier: string): { allowed: boolean; remaining: number; resetIn: number } {
+function checkRateLimit(identifier: string) {
   const now = Date.now();
   const record = rateLimitMap.get(identifier);
   
@@ -27,135 +27,159 @@ function checkRateLimit(identifier: string): { allowed: boolean; remaining: numb
 }
 
 export async function POST(request: NextRequest) {
+  let inputPath = "";
+  let outputPath = "";
+  
   try {
-    // Rate limit check
     const ip = request.headers.get("x-forwarded-for") || "unknown";
     const rateLimit = checkRateLimit(ip);
     
     if (!rateLimit.allowed) {
       return NextResponse.json(
         { 
-          error: "Rate limit exceeded", 
-          message: `You have reached the maximum of ${RPM} requests per minute.`,
+          error: "RATE_LIMIT_EXCEEDED", 
+          message: `Maximum ${RPM} requests per minute. Retry in ${Math.ceil(rateLimit.resetIn / 1000)} seconds.`,
           retryAfter: Math.ceil(rateLimit.resetIn / 1000)
         },
-        { 
-          status: 429,
-          headers: {
-            "Retry-After": String(Math.ceil(rateLimit.resetIn / 1000)),
-            "X-RateLimit-Remaining": "0"
-          }
-        }
+        { status: 429 }
       );
     }
 
-    const { image, prompt, resolution, apiKey } = await request.json();
+    const formData = await request.formData();
+    const imageFile = formData.get("image") as File | null;
+    const prompt = formData.get("prompt") as string;
+    const resolution = formData.get("resolution") as string || "1024x1024";
+    const apiKey = formData.get("apiKey") as string;
 
-    if (!image || !prompt) {
+    if (!imageFile) {
       return NextResponse.json(
-        { error: "Missing required fields", message: "Please provide both image and prompt" },
+        { error: "NO_IMAGE", message: "Please upload an image file" },
+        { status: 400 }
+      );
+    }
+
+    if (!prompt) {
+      return NextResponse.json(
+        { error: "NO_PROMPT", message: "Please provide a prompt for the image" },
         { status: 400 }
       );
     }
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: "API key required", message: "Please set your API key in Settings" },
+        { error: "NO_API_KEY", message: "Please set your API key in Settings tab" },
         { status: 401 }
       );
     }
 
-    // Validate API key format (basic check)
     if (!apiKey.startsWith("AIza")) {
       return NextResponse.json(
-        { error: "Invalid API key", message: "Please check your Gemini API key in Settings" },
+        { error: "INVALID_API_KEY", message: "Invalid API key format. Gemini keys start with AIza..." },
         { status: 401 }
       );
     }
 
-    // Save input image temporarily
-    const inputPath = path.join("/tmp", `input-${uuidv4()}.png`);
-    const outputPath = path.join("/tmp", `output-${uuidv4()}.png`);
+    // Convert file to base64
+    const arrayBuffer = await imageFile.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const base64Image = buffer.toString("base64");
+    const mimeType = imageFile.type;
 
-    try {
-      // Decode base64 and save
-      const imageBuffer = Buffer.from(image, "base64");
-      await writeFile(inputPath, imageBuffer);
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid image data", message: "Could not decode the uploaded image" },
-        { status: 400 }
-      );
-    }
-
-    // Run the generation script
-    await new Promise<void>((resolve, reject) => {
-      const scriptPath = path.join(process.cwd(), "scripts", "generate_image.py");
-
-      const env = { ...process.env, GEMINI_API_KEY: apiKey };
-
-      const proc = spawn("uv", [
-        "run",
-        scriptPath,
-        "--prompt",
-        prompt,
-        "--filename",
-        outputPath,
-        "--resolution",
-        resolution || "1K",
-        "-i",
-        inputPath,
-      ], { env, timeout: 120000 });
-
-      let errorOutput = "";
-
-      proc.stderr.on("data", (data) => {
-        errorOutput += data.toString();
-      });
-
-      proc.on("error", (err) => {
-        reject(new Error(`Failed to start generation: ${err.message}`));
-      });
-
-      proc.on("close", (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(errorOutput || "Image generation failed"));
-        }
-      });
-    });
-
-    // Read the generated image
-    const fs = require("fs");
+    // Initialize Gemini
+    const genAI = new GoogleGenerativeAI(apiKey);
     
-    if (!fs.existsSync(outputPath)) {
+    // Use gemini-2.0-flash-exp for image generation
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+
+    // Build the prompt
+    const fullPrompt = `${prompt}. High quality, professional product photography, 4k, detailed.`;
+
+    // Generate image
+    const result = await model.generateContent([
+      {
+        inlineData: {
+          data: base64Image,
+          mimeType: mimeType
+        }
+      },
+      { text: fullPrompt }
+    ]);
+
+    const response = result.response;
+    const candidates = response.candidates;
+
+    if (!candidates || candidates.length === 0) {
       return NextResponse.json(
-        { error: "Generation failed", message: "The image was not generated. Please try again." },
+        { error: "NO_RESPONSE", message: "No image generated. The model returned no response." },
         { status: 500 }
       );
     }
 
-    const generatedImage = fs.readFileSync(outputPath);
-    const base64Image = generatedImage.toString("base64");
+    const candidate = candidates[0];
+    if (!candidate.content || !candidate.content.parts || candidate.content.parts.length === 0) {
+      return NextResponse.json(
+        { error: "EMPTY_RESPONSE", message: "The model returned an empty response." },
+        { status: 500 }
+      );
+    }
 
-    // Clean up temp files
-    await unlink(inputPath).catch(() => {});
-    await unlink(outputPath).catch(() => {});
+    // Check for image in response
+    let base64Result = "";
+    for (const part of candidate.content.parts) {
+      if (part.inlineData) {
+        base64Result = part.inlineData.data;
+        break;
+      }
+    }
+
+    if (!base64Result) {
+      // Try to get text response as fallback
+      const text = candidate.content.parts.map(p => p.text || "").join("");
+      return NextResponse.json(
+        { 
+          error: "NO_IMAGE_IN_RESPONSE", 
+          message: "The model returned text instead of an image. Try a different prompt.",
+          debug: text
+        },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
-      imageUrl: `data:image/png;base64,${base64Image}`,
-      rateLimit: {
-        remaining: rateLimit.remaining,
-        resetIn: rateLimit.resetIn
-      }
+      imageUrl: `data:image/png;base64,${base64Result}`,
+      rateLimit: { remaining: rateLimit.remaining, resetIn: rateLimit.resetIn }
     });
-  } catch (error) {
-    console.error("Error generating image:", error);
+
+  } catch (error: any) {
+    console.error("Hero Image Generation Error:", error);
+    
+    // Parse specific error types
+    if (error.message?.includes("API_KEY")) {
+      return NextResponse.json(
+        { error: "INVALID_API_KEY", message: "Your API key is invalid or expired." },
+        { status: 401 }
+      );
+    }
+    
+    if (error.message?.includes("rate limit")) {
+      return NextResponse.json(
+        { error: "API_RATE_LIMIT", message: "Google API rate limit exceeded. Please wait and try again." },
+        { status: 429 }
+      );
+    }
+    
+    if (error.message?.includes("Unsupported")) {
+      return NextResponse.json(
+        { error: "UNSUPPORTED_FORMAT", message: "Image format not supported. Try JPG or PNG." },
+        { status: 400 }
+      );
+    }
+
     return NextResponse.json(
       { 
-        error: "Generation failed", 
-        message: error instanceof Error ? error.message : "An unexpected error occurred" 
+        error: "GENERATION_FAILED", 
+        message: error.message || "Failed to generate image. Please try again.",
+        stack: process.env.NODE_ENV === "development" ? error.stack : undefined
       },
       { status: 500 }
     );

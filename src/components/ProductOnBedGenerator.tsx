@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Image from "next/image";
 
 interface GeneratedImage {
@@ -10,20 +10,29 @@ interface GeneratedImage {
 }
 
 export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
-  const [bedImage, setBedImage] = useState<string | null>(null);
-  const [productImage, setProductImage] = useState<string | null>(null);
+  const [bedImage, setBedImage] = useState<File | null>(null);
+  const [bedImagePreview, setBedImagePreview] = useState<string | null>(null);
+  const [productImage, setProductImage] = useState<File | null>(null);
+  const [productImagePreview, setProductImagePreview] = useState<string | null>(null);
   const [productType, setProductType] = useState("pillow");
   const [prompt, setPrompt] = useState("");
-  const [resolution, setResolution] = useState<"1K" | "2K" | "4K">("1K");
+  const [resolution, setResolution] = useState("1024x1024");
   const [loading, setLoading] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [error, setError] = useState("");
+  const [storedApiKey, setStoredApiKey] = useState(apiKey);
+  
+  useEffect(() => {
+    const stored = localStorage.getItem("gemini_api_key");
+    if (stored) setStoredApiKey(stored);
+  }, [apiKey]);
 
   const handleBedUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setBedImage(file);
       const reader = new FileReader();
-      reader.onload = () => setBedImage(reader.result as string);
+      reader.onload = () => setBedImagePreview(reader.result as string);
       reader.readAsDataURL(file);
     }
   }, []);
@@ -31,14 +40,17 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
   const handleProductUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setProductImage(file);
       const reader = new FileReader();
-      reader.onload = () => setProductImage(reader.result as string);
+      reader.onload = () => setProductImagePreview(reader.result as string);
       reader.readAsDataURL(file);
     }
   }, []);
 
   const generateProductOnBed = async () => {
-    if (!apiKey) {
+    const key = storedApiKey || apiKey;
+    
+    if (!key) {
       setError("Please set your API key in Settings tab first");
       return;
     }
@@ -51,28 +63,30 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
     setError("");
 
     try {
-      const base64Bed = bedImage.split(",")[1];
-      const base64Product = productImage.split(",")[1];
-      
+      const formData = new FormData();
+      formData.append("bedImage", bedImage);
+      formData.append("productImage", productImage);
+      formData.append("productType", productType);
+      formData.append("prompt", prompt);
+      formData.append("resolution", resolution);
+      formData.append("apiKey", key);
+
       const response = await fetch("/api/generate-product-bed", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bedImage: base64Bed,
-          productImage: base64Product,
-          productType,
-          prompt: prompt || `Place a ${productType} naturally on the bed, properly aligned and positioned`,
-          resolution,
-          apiKey,
-        }),
+        body: formData,
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        throw new Error("Failed to generate image");
+        if (data.error) {
+          setError(`${data.error}: ${data.message}`);
+        } else {
+          throw new Error(data.message || "Failed to generate");
+        }
+        return;
       }
 
-      const data = await response.json();
-      
       setGeneratedImages([
         {
           id: Date.now().toString(),
@@ -106,13 +120,13 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
               1. Upload Bed Image (Base)
             </label>
             <div
-              className={`drop-zone ${bedImage ? "border-primary-500 bg-primary-50" : ""}`}
+              className={`drop-zone ${bedImagePreview ? "border-primary-500 bg-primary-50" : ""}`}
               onClick={() => document.getElementById("bed-image-input")?.click()}
             >
-              {bedImage ? (
+              {bedImagePreview ? (
                 <div className="relative w-full h-32">
                   <Image
-                    src={bedImage}
+                    src={bedImagePreview}
                     alt="Bed"
                     fill
                     className="object-cover rounded"
@@ -140,13 +154,13 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
               2. Upload Product Image
             </label>
             <div
-              className={`drop-zone ${productImage ? "border-primary-500 bg-primary-50" : ""}`}
+              className={`drop-zone ${productImagePreview ? "border-primary-500 bg-primary-50" : ""}`}
               onClick={() => document.getElementById("product-image-input")?.click()}
             >
-              {productImage ? (
+              {productImagePreview ? (
                 <div className="relative w-full h-32">
                   <Image
-                    src={productImage}
+                    src={productImagePreview}
                     alt="Product"
                     fill
                     className="object-contain rounded"
@@ -207,7 +221,7 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
               Resolution
             </label>
             <div className="flex gap-2">
-              {(["1K", "2K", "4K"] as const).map((res) => (
+              {["1024x1024", "1024x1536", "1536x1024"].map((res) => (
                 <button
                   key={res}
                   onClick={() => setResolution(res)}
@@ -244,7 +258,7 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
 
           {error && (
             <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
-              {error}
+              <strong>Error:</strong> {error}
             </div>
           )}
         </div>
@@ -274,7 +288,7 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
                     <p className="text-sm text-gray-600 line-clamp-2">{img.prompt}</p>
                     <a
                       href={img.url}
-                      download
+                      download={`product-bed-${img.id}.png`}
                       className="mt-2 btn-secondary inline-block text-sm"
                     >
                       Download

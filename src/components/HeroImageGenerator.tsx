@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Image from "next/image";
 
 interface GeneratedImage {
@@ -10,24 +10,37 @@ interface GeneratedImage {
 }
 
 export default function HeroImageGenerator({ apiKey }: { apiKey: string }) {
-  const [productImage, setProductImage] = useState<string | null>(null);
+  const [productImage, setProductImage] = useState<File | null>(null);
+  const [productImagePreview, setProductImagePreview] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
-  const [resolution, setResolution] = useState<"1K" | "2K" | "4K">("1K");
+  const [resolution, setResolution] = useState("1024x1024");
   const [loading, setLoading] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [error, setError] = useState("");
+  const [rateLimitInfo, setRateLimitInfo] = useState<{remaining: number; resetIn: number} | null>(null);
+
+  // Load API key from localStorage
+  const [storedApiKey, setStoredApiKey] = useState(apiKey);
+  
+  useEffect(() => {
+    const stored = localStorage.getItem("gemini_api_key");
+    if (stored) setStoredApiKey(stored);
+  }, [apiKey]);
 
   const handleImageUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setProductImage(file);
       const reader = new FileReader();
-      reader.onload = () => setProductImage(reader.result as string);
+      reader.onload = () => setProductImagePreview(reader.result as string);
       reader.readAsDataURL(file);
     }
   }, []);
 
   const generateHeroImage = async () => {
-    if (!apiKey) {
+    const key = storedApiKey || apiKey;
+    
+    if (!key) {
       setError("Please set your API key in Settings tab first");
       return;
     }
@@ -38,28 +51,43 @@ export default function HeroImageGenerator({ apiKey }: { apiKey: string }) {
 
     setLoading(true);
     setError("");
+    setRateLimitInfo(null);
 
     try {
-      // Convert base64 to file
-      const base64Data = productImage.split(",")[1];
-      
+      const formData = new FormData();
+      formData.append("image", productImage);
+      formData.append("prompt", prompt);
+      formData.append("resolution", resolution);
+      formData.append("apiKey", key);
+
       const response = await fetch("/api/generate-hero", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image: base64Data,
-          prompt,
-          resolution,
-          apiKey,
-        }),
+        body: formData,
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        throw new Error("Failed to generate image");
+        // Handle specific error codes
+        if (data.error) {
+          switch (data.error) {
+            case "NO_API_KEY":
+            case "INVALID_API_KEY":
+              setError(`API Key Error: ${data.message}. Please check Settings.`);
+              break;
+            case "RATE_LIMIT_EXCEEDED":
+              setError(`${data.message}`);
+              if (data.retryAfter) setRateLimitInfo({ remaining: 0, resetIn: data.retryAfter * 1000 });
+              break;
+            default:
+              setError(data.message || "Failed to generate image");
+          }
+        } else {
+          throw new Error(data.message || "Failed to generate image");
+        }
+        return;
       }
 
-      const data = await response.json();
-      
       setGeneratedImages([
         {
           id: Date.now().toString(),
@@ -68,6 +96,10 @@ export default function HeroImageGenerator({ apiKey }: { apiKey: string }) {
         },
         ...generatedImages,
       ]);
+      
+      if (data.rateLimit) {
+        setRateLimitInfo(data.rateLimit);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
@@ -84,6 +116,12 @@ export default function HeroImageGenerator({ apiKey }: { apiKey: string }) {
         </p>
       </div>
 
+      {rateLimitInfo && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
+          Rate limit: {rateLimitInfo.remaining} requests remaining. Resets in {Math.ceil(rateLimitInfo.resetIn / 1000)}s
+        </div>
+      )}
+
       <div className="grid md:grid-cols-2 gap-6">
         {/* Input Section */}
         <div className="space-y-4">
@@ -93,13 +131,13 @@ export default function HeroImageGenerator({ apiKey }: { apiKey: string }) {
               Upload Product Image
             </label>
             <div
-              className={`drop-zone ${productImage ? "border-primary-500 bg-primary-50" : ""}`}
+              className={`drop-zone ${productImagePreview ? "border-primary-500 bg-primary-50" : ""}`}
               onClick={() => document.getElementById("hero-image-input")?.click()}
             >
-              {productImage ? (
+              {productImagePreview ? (
                 <div className="relative w-full h-48">
                   <Image
-                    src={productImage}
+                    src={productImagePreview}
                     alt="Product"
                     fill
                     className="object-contain"
@@ -129,7 +167,7 @@ export default function HeroImageGenerator({ apiKey }: { apiKey: string }) {
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="e.g., Professional studio product photography, white background, soft lighting, product shot, clean and modern"
+              placeholder="e.g., Professional studio product photography, white background, soft lighting"
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               rows={4}
             />
@@ -141,7 +179,7 @@ export default function HeroImageGenerator({ apiKey }: { apiKey: string }) {
               Resolution
             </label>
             <div className="flex gap-2">
-              {(["1K", "2K", "4K"] as const).map((res) => (
+              {["1024x1024", "1024x1536", "1536x1024"].map((res) => (
                 <button
                   key={res}
                   onClick={() => setResolution(res)}
@@ -178,7 +216,7 @@ export default function HeroImageGenerator({ apiKey }: { apiKey: string }) {
 
           {error && (
             <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
-              {error}
+              <strong>Error:</strong> {error}
             </div>
           )}
         </div>
@@ -207,7 +245,7 @@ export default function HeroImageGenerator({ apiKey }: { apiKey: string }) {
                     <p className="text-sm text-gray-600 line-clamp-2">{img.prompt}</p>
                     <a
                       href={img.url}
-                      download
+                      download={`hero-${img.id}.png`}
                       className="mt-2 btn-secondary inline-block text-sm"
                     >
                       Download

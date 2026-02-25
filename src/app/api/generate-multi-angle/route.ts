@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { spawn } from "child_process";
-import path from "path";
-import { writeFile, unlink, readFile } from "fs/promises";
-import { v4 as uuidv4 } from "uuid";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // Rate limiter
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -34,49 +31,66 @@ export async function POST(request: NextRequest) {
     if (!rateLimit.allowed) {
       return NextResponse.json(
         { 
-          error: "Rate limit exceeded", 
-          message: `Maximum ${RPM} requests per minute. Retry in ${Math.ceil(rateLimit.resetIn / 1000)}s`,
+          error: "RATE_LIMIT_EXCEEDED", 
+          message: `Maximum ${RPM} requests per minute. Retry in ${Math.ceil(rateLimit.resetIn / 1000)} seconds.`,
           retryAfter: Math.ceil(rateLimit.resetIn / 1000)
         },
         { status: 429 }
       );
     }
 
-    const { image, angles, prompt, resolution, apiKey } = await request.json();
+    const formData = await request.formData();
+    const imageFile = formData.get("image") as File | null;
+    const anglesStr = formData.get("angles") as string;
+    const prompt = formData.get("prompt") as string;
+    const apiKey = formData.get("apiKey") as string;
 
-    if (!image || !angles || !Array.isArray(angles)) {
+    if (!imageFile) {
       return NextResponse.json(
-        { error: "Invalid request", message: "Please provide an image and select at least one angle" },
+        { error: "NO_IMAGE", message: "Please upload an image" },
+        { status: 400 }
+      );
+    }
+
+    if (!anglesStr) {
+      return NextResponse.json(
+        { error: "NO_ANGLES", message: "Please select at least one angle" },
+        { status: 400 }
+      );
+    }
+
+    const angles = JSON.parse(anglesStr);
+
+    if (!Array.isArray(angles) || angles.length === 0) {
+      return NextResponse.json(
+        { error: "INVALID_ANGLES", message: "Please select at least one angle" },
         { status: 400 }
       );
     }
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: "API key required", message: "Please set your API key in Settings" },
+        { error: "NO_API_KEY", message: "Please set your API key in Settings tab" },
         { status: 401 }
       );
     }
 
     if (!apiKey.startsWith("AIza")) {
       return NextResponse.json(
-        { error: "Invalid API key", message: "Please check your Gemini API key in Settings" },
+        { error: "INVALID_API_KEY", message: "Invalid API key format. Gemini keys start with AIza..." },
         { status: 401 }
       );
     }
 
-      const results: { url: string; angle: string; error?: string }[] = [];
-    const inputPath = path.join("/tmp", `input-${uuidv4()}.png`);
+    // Convert file to base64
+    const imageBuffer = Buffer.from(await imageFile.arrayBuffer());
+    const base64Image = imageBuffer.toString("base64");
 
-    try {
-      const imageBuffer = Buffer.from(image, "base64");
-      await writeFile(inputPath, imageBuffer);
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid image", message: "Could not decode the image" },
-        { status: 400 }
-      );
-    }
+    // Initialize Gemini
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+
+    const results: { url: string; angle: string; error?: string }[] = [];
 
     const anglePrompts: Record<string, string> = {
       "front": "Front view, straight on, professional photography",
@@ -87,54 +101,67 @@ export async function POST(request: NextRequest) {
       "corner": "Corner view, 3/4 perspective",
     };
 
+    // Generate each angle
     for (const angle of angles) {
-      const outputPath = path.join("/tmp", `output-${angle}-${uuidv4()}.png`);
-      const fullPrompt = prompt 
-        ? `${prompt}. ${anglePrompts[angle] || `Create a ${angle} perspective`}`
-        : `${anglePrompts[angle] || `Create a ${angle} perspective`}. Maintain consistent lighting and style.`;
-
-      await new Promise<void>((resolve, reject) => {
-        const scriptPath = path.join(process.cwd(), "scripts", "generate_image.py");
-        const env = { ...process.env, GEMINI_API_KEY: apiKey };
-
-        const proc = spawn("uv", [
-          "run", scriptPath, "--prompt", fullPrompt, "--filename", outputPath,
-          "--resolution", resolution || "1K", "-i", inputPath
-        ], { env, timeout: 120000 });
-
-        let errorOutput = "";
-
-        proc.stderr.on("data", (data) => { errorOutput += data.toString(); });
-        proc.on("error", (err) => { reject(new Error(`Failed: ${err.message}`)); });
-        proc.on("close", (code) => {
-          if (code === 0) resolve();
-          else reject(new Error(errorOutput || `Failed for angle: ${angle}`));
-        });
-      });
-
       try {
-        const generatedImage = await readFile(outputPath);
-        const base64Image = generatedImage.toString("base64");
-        results.push({ url: `data:image/png;base64,${base64Image}`, angle });
-      } catch {
-        results.push({ url: "", angle, error: "Failed to generate" });
+        const fullPrompt = prompt 
+          ? `${prompt}. ${anglePrompts[angle] || `Create a ${angle} perspective`}`
+          : `${anglePrompts[angle] || `Create a ${angle} perspective`}. Maintain consistent lighting and style.`;
+
+        const result = await model.generateContent([
+          {
+            inlineData: {
+              data: base64Image,
+              mimeType: imageFile.type
+            }
+          },
+          { text: fullPrompt }
+        ]);
+
+        const candidates = result.response.candidates;
+        
+        if (!candidates || candidates.length === 0) {
+          results.push({ url: "", angle, error: "No response from model" });
+          continue;
+        }
+
+        let base64Result = "";
+        for (const part of candidates[0].content.parts) {
+          if (part.inlineData) {
+            base64Result = part.inlineData.data;
+            break;
+          }
+        }
+
+        if (base64Result) {
+          results.push({ url: `data:image/png;base64,${base64Result}`, angle });
+        } else {
+          results.push({ url: "", angle, error: "No image in response" });
+        }
+      } catch (angleError: any) {
+        results.push({ url: "", angle, error: angleError.message });
       }
-
-      await unlink(outputPath).catch(() => {});
     }
-
-    await unlink(inputPath).catch(() => {});
 
     return NextResponse.json({
       images: results,
       rateLimit: { remaining: rateLimit.remaining, resetIn: rateLimit.resetIn }
     });
-  } catch (error) {
-    console.error("Error:", error);
+
+  } catch (error: any) {
+    console.error("Multi-Angle Error:", error);
+    
+    if (error.message?.includes("API_KEY")) {
+      return NextResponse.json(
+        { error: "INVALID_API_KEY", message: "Your API key is invalid or expired." },
+        { status: 401 }
+      );
+    }
+
     return NextResponse.json(
       { 
-        error: "Generation failed", 
-        message: error instanceof Error ? error.message : "An unexpected error occurred" 
+        error: "GENERATION_FAILED", 
+        message: error.message || "Failed to generate images. Please try again." 
       },
       { status: 500 }
     );

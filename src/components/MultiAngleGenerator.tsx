@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Image from "next/image";
 
 interface GeneratedImage {
@@ -19,19 +19,27 @@ const angles = [
 ];
 
 export default function MultiAngleGenerator({ apiKey }: { apiKey: string }) {
-  const [lifestyleImage, setLifestyleImage] = useState<string | null>(null);
+  const [lifestyleImage, setLifestyleImage] = useState<File | null>(null);
+  const [lifestyleImagePreview, setLifestyleImagePreview] = useState<string | null>(null);
   const [selectedAngles, setSelectedAngles] = useState<string[]>(["front"]);
   const [prompt, setPrompt] = useState("");
-  const [resolution, setResolution] = useState<"1K" | "2K" | "4K">("1K");
+  const [resolution, setResolution] = useState("1024x1024");
   const [loading, setLoading] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [error, setError] = useState("");
+  const [storedApiKey, setStoredApiKey] = useState(apiKey);
+  
+  useEffect(() => {
+    const stored = localStorage.getItem("gemini_api_key");
+    if (stored) setStoredApiKey(stored);
+  }, [apiKey]);
 
   const handleImageUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setLifestyleImage(file);
       const reader = new FileReader();
-      reader.onload = () => setLifestyleImage(reader.result as string);
+      reader.onload = () => setLifestyleImagePreview(reader.result as string);
       reader.readAsDataURL(file);
     }
   }, []);
@@ -45,7 +53,9 @@ export default function MultiAngleGenerator({ apiKey }: { apiKey: string }) {
   };
 
   const generateMultiAngle = async () => {
-    if (!apiKey) {
+    const key = storedApiKey || apiKey;
+    
+    if (!key) {
       setError("Please set your API key in Settings tab first");
       return;
     }
@@ -58,31 +68,36 @@ export default function MultiAngleGenerator({ apiKey }: { apiKey: string }) {
     setError("");
 
     try {
-      const base64Image = lifestyleImage.split(",")[1];
-      
+      const formData = new FormData();
+      formData.append("image", lifestyleImage);
+      formData.append("angles", JSON.stringify(selectedAngles));
+      formData.append("prompt", prompt);
+      formData.append("resolution", resolution);
+      formData.append("apiKey", key);
+
       const response = await fetch("/api/generate-multi-angle", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image: base64Image,
-          angles: selectedAngles,
-          prompt: prompt || "Maintain consistent lighting and style, professional product photography",
-          resolution,
-          apiKey,
-        }),
+        body: formData,
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        throw new Error("Failed to generate images");
+        if (data.error) {
+          setError(`${data.error}: ${data.message}`);
+        } else {
+          throw new Error(data.message || "Failed to generate");
+        }
+        return;
       }
 
-      const data = await response.json();
-      
-      const newImages: GeneratedImage[] = data.images.map((img: { url: string; angle: string }, idx: number) => ({
-        id: (Date.now() + idx).toString(),
-        url: img.url,
-        angle: selectedAngles[idx] || `Angle ${idx + 1}`,
-      }));
+      const newImages: GeneratedImage[] = data.images
+        .filter((img: { url: string }) => img.url)
+        .map((img: { url: string; angle: string }, idx: number) => ({
+          id: (Date.now() + idx).toString(),
+          url: img.url,
+          angle: img.angle,
+        }));
       
       setGeneratedImages([...newImages, ...generatedImages]);
     } catch (err) {
@@ -110,13 +125,13 @@ export default function MultiAngleGenerator({ apiKey }: { apiKey: string }) {
               Upload Lifestyle Image
             </label>
             <div
-              className={`drop-zone ${lifestyleImage ? "border-primary-500 bg-primary-50" : ""}`}
+              className={`drop-zone ${lifestyleImagePreview ? "border-primary-500 bg-primary-50" : ""}`}
               onClick={() => document.getElementById("lifestyle-image-input")?.click()}
             >
-              {lifestyleImage ? (
+              {lifestyleImagePreview ? (
                 <div className="relative w-full h-48">
                   <Image
-                    src={lifestyleImage}
+                    src={lifestyleImagePreview}
                     alt="Lifestyle"
                     fill
                     className="object-cover rounded"
@@ -169,7 +184,7 @@ export default function MultiAngleGenerator({ apiKey }: { apiKey: string }) {
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="e.g., Maintain consistent lighting, same time of day, professional product photography style, natural colors"
+              placeholder="e.g., Maintain consistent lighting, same time of day, professional product photography style"
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               rows={3}
             />
@@ -181,7 +196,7 @@ export default function MultiAngleGenerator({ apiKey }: { apiKey: string }) {
               Resolution
             </label>
             <div className="flex gap-2">
-              {(["1K", "2K", "4K"] as const).map((res) => (
+              {["1024x1024", "1024x1536", "1536x1024"].map((res) => (
                 <button
                   key={res}
                   onClick={() => setResolution(res)}
@@ -218,7 +233,7 @@ export default function MultiAngleGenerator({ apiKey }: { apiKey: string }) {
 
           {error && (
             <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
-              {error}
+              <strong>Error:</strong> {error}
             </div>
           )}
         </div>
@@ -249,7 +264,7 @@ export default function MultiAngleGenerator({ apiKey }: { apiKey: string }) {
                     <span className="text-sm font-medium text-gray-700">{img.angle}</span>
                     <a
                       href={img.url}
-                      download
+                      download={`angle-${img.angle}-${img.id}.png`}
                       className="block mt-1 text-xs text-primary-600 hover:text-primary-700"
                     >
                       Download
