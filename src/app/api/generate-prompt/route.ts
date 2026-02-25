@@ -5,14 +5,38 @@ export async function POST(request: NextRequest) {
   try {
     const { image, productType, brandStyle, targetAudience, apiKey } = await request.json();
 
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: "OpenAI API key is required" },
-        { status: 400 }
-      );
+    // Check for OAuth token first, then fall back to API key
+    let accessToken = request.cookies.get("openai_access_token")?.value;
+    
+    // If no OAuth token, try to refresh
+    if (!accessToken) {
+      const refreshResponse = await fetch(new URL("/api/auth/refresh", request.url).toString(), {
+        method: "POST",
+        cookies: request.cookies,
+      });
+      
+      if (refreshResponse.ok) {
+        accessToken = refreshResponse.cookies.get("openai_access_token")?.value;
+      }
     }
 
-    const openai = new OpenAI({ apiKey });
+    // Use OAuth token or API key
+    let openai: OpenAI;
+    
+    if (accessToken) {
+      openai = new OpenAI({ 
+        apiKey: accessToken,
+        // @ts-ignore - OpenAI SDK supports bearer token
+        baseURL: "https://api.openai.com/v1",
+      });
+    } else if (apiKey) {
+      openai = new OpenAI({ apiKey });
+    } else {
+      return NextResponse.json(
+        { error: "OpenAI authentication required. Please connect via OAuth or enter API key in Settings." },
+        { status: 401 }
+      );
+    }
 
     // Build the analysis prompt
     let analysisPrompt = `You are an expert e-commerce product photographer and AI image prompt engineer. `;
