@@ -29,7 +29,7 @@ const cameraAngles = [
   { id: "zoom-in", name: "Zoom In", prompt: "Zoom in shot, dynamic perspective compression" },
 ];
 
-export default function CameraAnglesGenerator({ apiKey }: { apiKey: string }) {
+export default function CameraAnglesGenerator() {
   const [lifestyleImage, setLifestyleImage] = useState<File | null>(null);
   const [lifestyleImagePreview, setLifestyleImagePreview] = useState<string | null>(null);
   const [count, setCount] = useState(10);
@@ -42,14 +42,12 @@ export default function CameraAnglesGenerator({ apiKey }: { apiKey: string }) {
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [error, setError] = useState("");
   const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
-  const [storedApiKey, setStoredApiKey] = useState(apiKey);
   const [viewMode, setViewMode] = useState<"grid" | "carousel">("grid");
   const [carouselIndex, setCarouselIndex] = useState(0);
   
   useEffect(() => {
-    const stored = localStorage.getItem("gemini_api_key");
-    if (stored) setStoredApiKey(stored);
-  }, [apiKey]);
+    // Placeholder
+  }, []);
 
   const handleImageUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -70,12 +68,8 @@ export default function CameraAnglesGenerator({ apiKey }: { apiKey: string }) {
   };
 
   const generateImages = async () => {
-    const key = storedApiKey || apiKey;
+    // API key is now handled server-side via GEMINI_API_KEY env variable
     
-    if (!key) {
-      setError("Please set your API key in Settings tab first");
-      return;
-    }
     if (!lifestyleImage || selectedAngles.length === 0) {
       setError("Please upload an image and select at least one angle");
       return;
@@ -106,8 +100,6 @@ export default function CameraAnglesGenerator({ apiKey }: { apiKey: string }) {
         formData.append("quality", quality);
         formData.append("aspectRatio", aspectRatio);
         formData.append("index", i.toString());
-        const storedKey = localStorage.getItem("gemini_api_key");
-        if (storedKey) formData.append("apiKey", storedKey);
 
         const response = await fetch("/api/generate-camera-angle", {
           method: "POST",

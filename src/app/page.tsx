@@ -4,10 +4,9 @@ import { useState } from "react";
 import HeroImageGenerator from "@/components/HeroImageGenerator";
 import ProductOnBedGenerator from "@/components/ProductOnBedGenerator";
 import CameraAnglesGenerator from "@/components/CameraAnglesGenerator";
-import AIPromptAssistant from "@/components/AIPromptAssistant";
 import SettingsPanel from "@/components/SettingsPanel";
 
-type TabId = "hero" | "product-bed" | "camera-angles" | "ai-prompt" | "settings";
+type TabId = "hero" | "product-bed" | "camera-angles" | "settings";
 
 interface Tab {
   id: TabId;
@@ -19,34 +18,22 @@ const tabs: Tab[] = [
   { id: "hero", name: "Hero Image", icon: "📸" },
   { id: "product-bed", name: "Product on Bed", icon: "🛏️" },
   { id: "camera-angles", name: "Camera Angles", icon: "📷" },
-  { id: "ai-prompt", name: "AI Prompt", icon: "🤖" },
   { id: "settings", name: "Settings", icon: "⚙️" },
 ];
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("hero");
-  const [apiKey, setApiKey] = useState("");
-  const [openAIKey, setOpenAIKey] = useState("");
 
   const renderContent = () => {
     switch (activeTab) {
       case "hero":
-        return <HeroImageGenerator apiKey={apiKey} />;
+        return <HeroImageGenerator />;
       case "product-bed":
-        return <ProductOnBedGenerator apiKey={apiKey} />;
+        return <ProductOnBedGenerator />;
       case "camera-angles":
-        return <CameraAnglesGenerator apiKey={apiKey} />;
-      case "ai-prompt":
-        return <AIPromptAssistant apiKey={openAIKey} />;
+        return <CameraAnglesGenerator />;
       case "settings":
-        return (
-          <SettingsPanel
-            apiKey={apiKey}
-            setApiKey={setApiKey}
-            openAIKey={openAIKey}
-            setOpenAIKey={setOpenAIKey}
-          />
-        );
+        return <SettingsPanel />;
       default:
         return null;
     }

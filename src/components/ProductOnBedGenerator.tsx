@@ -9,7 +9,7 @@ interface GeneratedImage {
   prompt: string;
 }
 
-export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
+export default function ProductOnBedGenerator() {
   const [bedImage, setBedImage] = useState<File | null>(null);
   const [bedImagePreview, setBedImagePreview] = useState<string | null>(null);
   const [productImage, setProductImage] = useState<File | null>(null);
@@ -24,12 +24,10 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [error, setError] = useState("");
   const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
-  const [storedApiKey, setStoredApiKey] = useState(apiKey);
   
   useEffect(() => {
-    const stored = localStorage.getItem("gemini_api_key");
-    if (stored) setStoredApiKey(stored);
-  }, [apiKey]);
+    // Placeholder
+  }, []);
 
   const handleBedUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -52,12 +50,8 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
   }, []);
 
   const generateImages = async () => {
-    const key = storedApiKey || apiKey;
+    // API key is now handled server-side via GEMINI_API_KEY env variable
     
-    if (!key) {
-      setError("Please set your API key in Settings tab first");
-      return;
-    }
     if (!bedImage || !productImage) {
       setError("Please upload both bed and product images");
       return;
@@ -85,8 +79,6 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
         formData.append("quality", quality);
         formData.append("aspectRatio", aspectRatio);
         formData.append("index", i.toString());
-        const storedKey = localStorage.getItem("gemini_api_key");
-        if (storedKey) formData.append("apiKey", storedKey);
 
         const response = await fetch("/api/generate-product-bed", {
           method: "POST",

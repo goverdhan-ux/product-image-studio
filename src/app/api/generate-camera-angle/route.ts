@@ -64,16 +64,15 @@ export async function POST(request: NextRequest) {
     const aspectRatio = formData.get("aspectRatio") as string || "1:1";
     const quality = formData.get("quality") as string || "1K";
     
-    const envApiKey = process.env.GEMINI_API_KEY;
-    const frontendApiKey = formData.get("apiKey") as string;
-    const apiKey = envApiKey || frontendApiKey;
+    // Only use env variable for API key
+    const apiKey = process.env.GEMINI_API_KEY;
 
     if (!imageFile) {
       return NextResponse.json({ error: "NO_IMAGE", message: "Please upload an image" }, { status: 400 });
     }
 
     if (!apiKey) {
-      return NextResponse.json({ error: "NO_API_KEY", message: "API key required" }, { status: 401 });
+      return NextResponse.json({ error: "NO_API_KEY", message: "GEMINI_API_KEY environment variable is not set" }, { status: 401 });
     }
 
     if (!apiKey.startsWith("AIza")) {
