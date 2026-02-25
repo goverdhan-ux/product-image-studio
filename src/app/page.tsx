@@ -4,7 +4,7 @@ import { useState } from "react";
 import HeroImageGenerator from "@/components/HeroImageGenerator";
 import ProductOnBedGenerator from "@/components/ProductOnBedGenerator";
 import MultiAngleGenerator from "@/components/MultiAngleGenerator";
-import AI PromptAssistant from "@/components/AIPromptAssistant";
+import AIPromptAssistant from "@/components/AIPromptAssistant";
 import SettingsPanel from "@/components/SettingsPanel";
 
 type TabId = "hero" | "product-bed" | "multi-angle" | "ai-prompt" | "settings";
@@ -37,7 +37,7 @@ export default function Home() {
       case "multi-angle":
         return <MultiAngleGenerator apiKey={apiKey} />;
       case "ai-prompt":
-        return <AI PromptAssistant apiKey={openAIKey} />;
+        return <AIPromptAssistant apiKey={openAIKey} />;
       case "settings":
         return (
           <SettingsPanel
