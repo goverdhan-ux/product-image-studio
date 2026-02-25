@@ -49,7 +49,11 @@ export async function POST(request: NextRequest) {
     const imageFile = formData.get("image") as File | null;
     const prompt = formData.get("prompt") as string;
     const resolution = formData.get("resolution") as string || "1024x1024";
-    const apiKey = formData.get("apiKey") as string;
+    const frontendApiKey = formData.get("apiKey") as string;
+    
+    // Get API key from env or frontend
+    const envApiKey = process.env.GEMINI_API_KEY;
+    const apiKey = envApiKey || frontendApiKey;
 
     if (!imageFile) {
       return NextResponse.json(
@@ -67,7 +71,7 @@ export async function POST(request: NextRequest) {
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: "NO_API_KEY", message: "Please set your API key in Settings tab" },
+        { error: "NO_API_KEY", message: "Please set your API key in Settings or add GEMINI_API_KEY env variable" },
         { status: 401 }
       );
     }
