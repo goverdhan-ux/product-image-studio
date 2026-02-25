@@ -69,14 +69,21 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
       formData.append("productType", productType);
       formData.append("prompt", prompt);
       formData.append("resolution", resolution);
-      formData.append("apiKey", key);
+      // Only send API key if provided in frontend (env is used server-side)
+      const storedKey = localStorage.getItem("gemini_api_key");
+      if (storedKey) {
+        formData.append("apiKey", storedKey);
+      }
 
+      console.log("Sending request to /api/generate-product-bed...");
       const response = await fetch("/api/generate-product-bed", {
         method: "POST",
         body: formData,
       });
 
+      console.log("Response status:", response.status);
       const data = await response.json();
+      console.log("Response data:", data);
 
       if (!response.ok) {
         if (data.error) {
@@ -84,6 +91,11 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
         } else {
           throw new Error(data.message || "Failed to generate");
         }
+        return;
+      }
+
+      if (!data.imageUrl) {
+        setError("No image was generated. Please try again.");
         return;
       }
 

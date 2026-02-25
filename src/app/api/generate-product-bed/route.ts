@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { v4 as uuidv4 } from "uuid";
 
 // Rate limiter
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -45,8 +43,10 @@ export async function POST(request: NextRequest) {
     const productFile = formData.get("productImage") as File | null;
     const productType = formData.get("productType") as string || "product";
     const prompt = formData.get("prompt") as string;
-    const frontendApiKey = formData.get("apiKey") as string;
+    const resolution = formData.get("resolution") as string || "1024x1024";
+    
     const envApiKey = process.env.GEMINI_API_KEY;
+    const frontendApiKey = formData.get("apiKey") as string;
     const apiKey = envApiKey || frontendApiKey;
 
     if (!bedFile || !productFile) {
@@ -76,56 +76,62 @@ export async function POST(request: NextRequest) {
     const base64Bed = bedBuffer.toString("base64");
     const base64Product = productBuffer.toString("base64");
 
-    // Initialize Gemini
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+    // Map resolution
+    const resolutionMap: Record<string, { width: number; height: number }> = {
+      "1024x1024": { width: 1024, height: 1024 },
+      "1024x1536": { width: 1024, height: 1536 },
+      "1536x1024": { width: 1536, height: 1024 },
+    };
+    const dims = resolutionMap[resolution] || resolutionMap["1024x1024"];
 
-    // Build the prompt
     const fullPrompt = prompt || `Place a ${productType} naturally on this bed, properly aligned, realistic composition, professional product photography, 4k quality`;
 
-    // Generate image with both images
-    const result = await model.generateContent([
+    // Use REST API
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
       {
-        inlineData: {
-          data: base64Bed,
-          mimeType: bedFile.type
-        }
-      },
-      {
-        inlineData: {
-          data: base64Product,
-          mimeType: productFile.type
-        }
-      },
-      { text: fullPrompt }
-    ]);
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { inlineData: { mimeType: bedFile.type, data: base64Bed } },
+              { inlineData: { mimeType: productFile.type, data: base64Product } },
+              { text: fullPrompt }
+            ]
+          }],
+          generationConfig: {
+            responseModalities: ["TEXT", "IMAGE"],
+            imageConfig: { imageSize: `${dims.width}x${dims.height}` }
+          }
+        })
+      }
+    );
 
-    const response = result.response;
-    const candidates = response.candidates;
-
-    if (!candidates || candidates.length === 0) {
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error("Gemini API error:", errorData);
       return NextResponse.json(
-        { error: "NO_RESPONSE", message: "No image generated. The model returned no response." },
+        { error: "API_ERROR", message: errorData.error?.message || "Failed to generate image" },
         { status: 500 }
       );
     }
 
+    const data = await response.json();
+    
     let base64Result = "";
-    for (const part of candidates[0].content.parts) {
-      if (part.inlineData) {
-        base64Result = part.inlineData.data;
-        break;
+    if (data.candidates?.[0]?.content?.parts) {
+      for (const part of data.candidates[0].content.parts) {
+        if (part.inlineData?.data) {
+          base64Result = part.inlineData.data;
+          break;
+        }
       }
     }
 
     if (!base64Result) {
-      const text = candidates[0].content.parts.map(p => p.text || "").join("");
       return NextResponse.json(
-        { 
-          error: "NO_IMAGE_IN_RESPONSE", 
-          message: "The model returned text instead of an image. Try a different prompt.",
-          debug: text
-        },
+        { error: "NO_IMAGE_IN_RESPONSE", message: "The model returned no image. Try a different prompt." },
         { status: 500 }
       );
     }
@@ -137,26 +143,8 @@ export async function POST(request: NextRequest) {
 
   } catch (error: any) {
     console.error("Product on Bed Error:", error);
-    
-    if (error.message?.includes("API_KEY")) {
-      return NextResponse.json(
-        { error: "INVALID_API_KEY", message: "Your API key is invalid or expired." },
-        { status: 401 }
-      );
-    }
-    
-    if (error.message?.includes("rate limit")) {
-      return NextResponse.json(
-        { error: "API_RATE_LIMIT", message: "Google API rate limit exceeded. Please wait and try again." },
-        { status: 429 }
-      );
-    }
-
     return NextResponse.json(
-      { 
-        error: "GENERATION_FAILED", 
-        message: error.message || "Failed to generate image. Please try again." 
-      },
+      { error: "GENERATION_FAILED", message: error.message || "Failed to generate image" },
       { status: 500 }
     );
   }

@@ -1,8 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { writeFile, unlink } from "fs/promises";
-import { v4 as uuidv4 } from "uuid";
-import { readFileSync, unlinkSync, existsSync } from "fs";
 
 // Rate limiter
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -27,9 +23,6 @@ function checkRateLimit(identifier: string) {
 }
 
 export async function POST(request: NextRequest) {
-  let inputPath = "";
-  let outputPath = "";
-  
   try {
     const ip = request.headers.get("x-forwarded-for") || "unknown";
     const rateLimit = checkRateLimit(ip);
@@ -49,10 +42,10 @@ export async function POST(request: NextRequest) {
     const imageFile = formData.get("image") as File | null;
     const prompt = formData.get("prompt") as string;
     const resolution = formData.get("resolution") as string || "1024x1024";
-    const frontendApiKey = formData.get("apiKey") as string;
     
     // Get API key from env or frontend
     const envApiKey = process.env.GEMINI_API_KEY;
+    const frontendApiKey = formData.get("apiKey") as string;
     const apiKey = envApiKey || frontendApiKey;
 
     if (!imageFile) {
@@ -89,61 +82,74 @@ export async function POST(request: NextRequest) {
     const base64Image = buffer.toString("base64");
     const mimeType = imageFile.type;
 
-    // Initialize Gemini
-    const genAI = new GoogleGenerativeAI(apiKey);
-    
-    // Use gemini-2.0-flash-exp for image generation
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+    // Map resolution to output dimensions
+    const resolutionMap: Record<string, { width: number; height: number }> = {
+      "1024x1024": { width: 1024, height: 1024 },
+      "1024x1536": { width: 1024, height: 1536 },
+      "1536x1024": { width: 1536, height: 1024 },
+    };
+    const dims = resolutionMap[resolution] || resolutionMap["1024x1024"];
 
-    // Build the prompt
-    const fullPrompt = `${prompt}. High quality, professional product photography, 4k, detailed.`;
-
-    // Generate image
-    const result = await model.generateContent([
+    // Use REST API directly for image generation
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
       {
-        inlineData: {
-          data: base64Image,
-          mimeType: mimeType
-        }
-      },
-      { text: fullPrompt }
-    ]);
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { inlineData: { mimeType, data: base64Image } },
+                { text: `${prompt}. High quality, professional product photography, 4k, detailed.` }
+              ]
+            }
+          ],
+          generationConfig: {
+            responseModalities: ["TEXT", "IMAGE"],
+            imageConfig: {
+              imageSize: `${dims.width}x${dims.height}`
+            }
+          }
+        })
+      }
+    );
 
-    const response = result.response;
-    const candidates = response.candidates;
-
-    if (!candidates || candidates.length === 0) {
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error("Gemini API error:", errorData);
       return NextResponse.json(
-        { error: "NO_RESPONSE", message: "No image generated. The model returned no response." },
+        { 
+          error: "API_ERROR", 
+          message: errorData.error?.message || "Failed to generate image via Gemini API" 
+        },
         { status: 500 }
       );
     }
 
-    const candidate = candidates[0];
-    if (!candidate.content || !candidate.content.parts || candidate.content.parts.length === 0) {
-      return NextResponse.json(
-        { error: "EMPTY_RESPONSE", message: "The model returned an empty response." },
-        { status: 500 }
-      );
-    }
-
-    // Check for image in response
+    const data = await response.json();
+    
+    // Extract image from response
     let base64Result = "";
-    for (const part of candidate.content.parts) {
-      if (part.inlineData) {
-        base64Result = part.inlineData.data;
-        break;
+    if (data.candidates && data.candidates[0]?.content?.parts) {
+      for (const part of data.candidates[0].content.parts) {
+        if (part.inlineData && part.inlineData.data) {
+          base64Result = part.inlineData.data;
+          break;
+        }
       }
     }
 
     if (!base64Result) {
-      // Try to get text response as fallback
-      const text = candidate.content.parts.map(p => p.text || "").join("");
+      // Check if there's text response
+      const textResponse = data.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("") || "";
       return NextResponse.json(
         { 
           error: "NO_IMAGE_IN_RESPONSE", 
-          message: "The model returned text instead of an image. Try a different prompt.",
-          debug: text
+          message: "The model returned text instead of an image. Model may not support image generation with this prompt.",
+          debug: textResponse.slice(0, 500)
         },
         { status: 500 }
       );
@@ -156,34 +162,10 @@ export async function POST(request: NextRequest) {
 
   } catch (error: any) {
     console.error("Hero Image Generation Error:", error);
-    
-    // Parse specific error types
-    if (error.message?.includes("API_KEY")) {
-      return NextResponse.json(
-        { error: "INVALID_API_KEY", message: "Your API key is invalid or expired." },
-        { status: 401 }
-      );
-    }
-    
-    if (error.message?.includes("rate limit")) {
-      return NextResponse.json(
-        { error: "API_RATE_LIMIT", message: "Google API rate limit exceeded. Please wait and try again." },
-        { status: 429 }
-      );
-    }
-    
-    if (error.message?.includes("Unsupported")) {
-      return NextResponse.json(
-        { error: "UNSUPPORTED_FORMAT", message: "Image format not supported. Try JPG or PNG." },
-        { status: 400 }
-      );
-    }
-
     return NextResponse.json(
       { 
         error: "GENERATION_FAILED", 
-        message: error.message || "Failed to generate image. Please try again.",
-        stack: process.env.NODE_ENV === "development" ? error.stack : undefined
+        message: error.message || "Failed to generate image. Please try again." 
       },
       { status: 500 }
     );
