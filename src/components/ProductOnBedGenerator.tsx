@@ -85,7 +85,14 @@ export default function ProductOnBedGenerator() {
           body: formData,
         });
 
-        const data = await response.json();
+        let data;
+        const contentType = response.headers.get("content-type");
+        
+        if (contentType && contentType.includes("application/json")) {
+          data = await response.json();
+        } else {
+          throw new Error("Request timed out or server error. Try fewer images or lower quality.");
+        }
 
         if (!response.ok || !data.imageUrl) {
           throw new Error(data.message || `Failed to generate image ${i + 1}`);

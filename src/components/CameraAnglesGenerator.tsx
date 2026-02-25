@@ -106,7 +106,15 @@ export default function CameraAnglesGenerator() {
           body: formData,
         });
 
-        const data = await response.json();
+        let data;
+        const contentType = response.headers.get("content-type");
+        
+        if (contentType && contentType.includes("application/json")) {
+          data = await response.json();
+        } else {
+          // Server returned HTML (error page) - likely timeout
+          throw new Error("Request timed out or server error. Try fewer angles or lower quality.");
+        }
 
         if (!response.ok || !data.imageUrl) {
           throw new Error(data.message || `Failed to generate ${angleObj?.name} view`);
