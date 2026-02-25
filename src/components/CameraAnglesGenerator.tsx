@@ -126,7 +126,15 @@ export default function CameraAnglesGenerator() {
       setProgress({ current: selectedAngles.length, total: selectedAngles.length, message: "All angles generated! ✅" });
       setCarouselIndex(0);
     } catch (err: any) {
-      setError(err.message || "An error occurred");
+      console.error("Error:", err);
+      let errorMessage = err.message || "An error occurred";
+      
+      // Handle timeout errors
+      if (err.name === "TypeError" && err.message.includes("Failed to fetch")) {
+        errorMessage = "Request timed out. The image generation took too long. Try fewer angles or lower quality.";
+      }
+      
+      setError(errorMessage);
       setProgress(null);
     } finally {
       setLoading(false);
