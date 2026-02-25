@@ -22,7 +22,7 @@ function checkRateLimit(identifier: string) {
   return { allowed: true, remaining: RPM - record.count, resetIn: record.resetTime - now };
 }
 
-// Map aspect ratios and quality to dimensions
+// Map aspect ratios to dimensions
 function getDimensions(aspectRatio: string, quality: string): { width: number; height: number } {
   const qualityMap: Record<string, number> = {
     "1K": 1024,
@@ -51,20 +51,16 @@ export async function POST(request: NextRequest) {
     
     if (!rateLimit.allowed) {
       return NextResponse.json(
-        { 
-          error: "RATE_LIMIT_EXCEEDED", 
-          message: `Maximum ${RPM} requests per minute. Retry in ${Math.ceil(rateLimit.resetIn / 1000)} seconds.`,
-          retryAfter: Math.ceil(rateLimit.resetIn / 1000)
-        },
+        { error: "RATE_LIMIT_EXCEEDED", message: `Max ${RPM}/min. Retry in ${Math.ceil(rateLimit.resetIn / 1000)}s` },
         { status: 429 }
       );
     }
 
     const formData = await request.formData();
-    const bedFile = formData.get("bedImage") as File | null;
-    const productFile = formData.get("productImage") as File | null;
-    const productType = formData.get("productType") as string || "product";
-    const prompt = formData.get("prompt") as string;
+    const imageFile = formData.get("image") as File | null;
+    const angle = formData.get("angle") as string;
+    const anglePrompt = formData.get("anglePrompt") as string;
+    const customPrompt = formData.get("customPrompt") as string;
     const aspectRatio = formData.get("aspectRatio") as string || "1:1";
     const quality = formData.get("quality") as string || "1K";
     
@@ -72,39 +68,25 @@ export async function POST(request: NextRequest) {
     const frontendApiKey = formData.get("apiKey") as string;
     const apiKey = envApiKey || frontendApiKey;
 
-    if (!bedFile || !productFile) {
-      return NextResponse.json(
-        { error: "MISSING_IMAGES", message: "Please upload both bed and product images" },
-        { status: 400 }
-      );
+    if (!imageFile) {
+      return NextResponse.json({ error: "NO_IMAGE", message: "Please upload an image" }, { status: 400 });
     }
 
     if (!apiKey) {
-      return NextResponse.json(
-        { error: "NO_API_KEY", message: "Please set your API key in Settings or add GEMINI_API_KEY env variable" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "NO_API_KEY", message: "API key required" }, { status: 401 });
     }
 
     if (!apiKey.startsWith("AIza")) {
-      return NextResponse.json(
-        { error: "INVALID_API_KEY", message: "Invalid API key format. Gemini keys start with AIza..." },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "INVALID_API_KEY", message: "Invalid API key format" }, { status: 401 });
     }
 
-    // Convert files to base64
-    const bedBuffer = Buffer.from(await bedFile.arrayBuffer());
-    const productBuffer = Buffer.from(await productFile.arrayBuffer());
-    const base64Bed = bedBuffer.toString("base64");
-    const base64Product = productBuffer.toString("base64");
-
-    // Get dimensions
+    const imageBuffer = Buffer.from(await imageFile.arrayBuffer());
+    const base64Image = imageBuffer.toString("base64");
     const dims = getDimensions(aspectRatio, quality);
 
-    const fullPrompt = prompt || `Place a ${productType} naturally on this bed, properly aligned, realistic composition, professional product photography, 4k quality`;
+    // Build the prompt
+    const fullPrompt = `${anglePrompt} ${customPrompt}`.trim() || anglePrompt;
 
-    // Use REST API
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
       {
@@ -113,8 +95,7 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           contents: [{
             parts: [
-              { inlineData: { mimeType: bedFile.type, data: base64Bed } },
-              { inlineData: { mimeType: productFile.type, data: base64Product } },
+              { inlineData: { mimeType: imageFile.type, data: base64Image } },
               { text: fullPrompt }
             ]
           }],
@@ -128,11 +109,7 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       const errorData = await response.json();
-      console.error("Gemini API error:", errorData);
-      return NextResponse.json(
-        { error: "API_ERROR", message: errorData.error?.message || "Failed to generate image" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "API_ERROR", message: errorData.error?.message || "Failed to generate" }, { status: 500 });
     }
 
     const data = await response.json();
@@ -148,10 +125,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!base64Result) {
-      return NextResponse.json(
-        { error: "NO_IMAGE_IN_RESPONSE", message: "The model returned no image. Try a different prompt." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "NO_IMAGE", message: "No image generated" }, { status: 500 });
     }
 
     return NextResponse.json({
@@ -161,10 +135,7 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error: any) {
-    console.error("Product on Bed Error:", error);
-    return NextResponse.json(
-      { error: "GENERATION_FAILED", message: error.message || "Failed to generate image" },
-      { status: 500 }
-    );
+    console.error("Camera Angle Error:", error);
+    return NextResponse.json({ error: "GENERATION_FAILED", message: error.message || "Failed to generate" }, { status: 500 });
   }
 }

@@ -16,10 +16,14 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
   const [productImagePreview, setProductImagePreview] = useState<string | null>(null);
   const [productType, setProductType] = useState("pillow");
   const [prompt, setPrompt] = useState("");
-  const [resolution, setResolution] = useState("1024x1024");
+  const [count, setCount] = useState(1);
+  const [aspectRatio, setAspectRatio] = useState("1:1");
+  const [quality, setQuality] = useState("1K");
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<{ current: number; total: number; message: string } | null>(null);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [error, setError] = useState("");
+  const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
   const [storedApiKey, setStoredApiKey] = useState(apiKey);
   
   useEffect(() => {
@@ -47,7 +51,7 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
     }
   }, []);
 
-  const generateProductOnBed = async () => {
+  const generateImages = async () => {
     const key = storedApiKey || apiKey;
     
     if (!key) {
@@ -61,88 +65,105 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
 
     setLoading(true);
     setError("");
+    setProgress({ current: 0, total: count, message: "Starting generation..." });
+
+    const newImages: GeneratedImage[] = [];
 
     try {
-      const formData = new FormData();
-      formData.append("bedImage", bedImage);
-      formData.append("productImage", productImage);
-      formData.append("productType", productType);
-      formData.append("prompt", prompt);
-      formData.append("resolution", resolution);
-      // Only send API key if provided in frontend (env is used server-side)
-      const storedKey = localStorage.getItem("gemini_api_key");
-      if (storedKey) {
-        formData.append("apiKey", storedKey);
-      }
+      for (let i = 0; i < count; i++) {
+        setProgress({ 
+          current: i + 1, 
+          total: count, 
+          message: `Generating image ${i + 1} of ${count}...` 
+        });
 
-      console.log("Sending request to /api/generate-product-bed...");
-      const response = await fetch("/api/generate-product-bed", {
-        method: "POST",
-        body: formData,
-      });
+        const formData = new FormData();
+        formData.append("bedImage", bedImage);
+        formData.append("productImage", productImage);
+        formData.append("productType", productType);
+        formData.append("prompt", prompt);
+        formData.append("quality", quality);
+        formData.append("aspectRatio", aspectRatio);
+        formData.append("index", i.toString());
+        const storedKey = localStorage.getItem("gemini_api_key");
+        if (storedKey) formData.append("apiKey", storedKey);
 
-      console.log("Response status:", response.status);
-      const data = await response.json();
-      console.log("Response data:", data);
+        const response = await fetch("/api/generate-product-bed", {
+          method: "POST",
+          body: formData,
+        });
 
-      if (!response.ok) {
-        if (data.error) {
-          setError(`${data.error}: ${data.message}`);
-        } else {
-          throw new Error(data.message || "Failed to generate");
+        const data = await response.json();
+
+        if (!response.ok || !data.imageUrl) {
+          throw new Error(data.message || `Failed to generate image ${i + 1}`);
         }
-        return;
-      }
 
-      if (!data.imageUrl) {
-        setError("No image was generated. Please try again.");
-        return;
-      }
-
-      setGeneratedImages([
-        {
-          id: Date.now().toString(),
+        const usedPrompt = data.usedPrompt || prompt || `Place a ${productType} on the bed`;
+        newImages.push({
+          id: `${Date.now()}-${i}`,
           url: data.imageUrl,
-          prompt: prompt || `Place a ${productType} on the bed`,
-        },
-        ...generatedImages,
-      ]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+          prompt: usedPrompt,
+        });
+        
+        setGeneratedImages(prev => [...newImages, ...prev]);
+      }
+
+      setProgress({ current: count, total: count, message: "All images generated! ✅" });
+    } catch (err: any) {
+      setError(err.message || "An error occurred");
+      setProgress(null);
     } finally {
       setLoading(false);
     }
+  };
+
+  const downloadAll = () => {
+    generatedImages.forEach((img, i) => {
+      const link = document.createElement("a");
+      link.href = img.url;
+      link.download = `product-bed-${i + 1}.png`;
+      link.click();
+    });
   };
 
   return (
     <div className="space-y-6">
       <div className="text-center">
         <h2 className="text-2xl font-bold text-gray-900">Product on Bed Generator</h2>
-        <p className="text-gray-600 mt-1">
-          Place your product on a bed image with AI-powered composition
-        </p>
+        <p className="text-gray-600 mt-1">Place your product on a bed image with AI composition</p>
       </div>
 
+      {progress && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex justify-between mb-2">
+            <span className="text-sm font-medium text-blue-800">{progress.message}</span>
+            <span className="text-sm text-blue-600">{progress.current}/{progress.total}</span>
+          </div>
+          <div className="w-full bg-blue-200 rounded-full h-2">
+            <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${(progress.current / progress.total) * 100}%` }} />
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
       <div className="grid md:grid-cols-2 gap-6">
-        {/* Input Section */}
         <div className="space-y-4">
-          {/* Bed Image Upload */}
+          {/* Bed Image */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              1. Upload Bed Image (Base)
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">1. Upload Bed Image (Base)</label>
             <div
               className={`drop-zone ${bedImagePreview ? "border-primary-500 bg-primary-50" : ""}`}
               onClick={() => document.getElementById("bed-image-input")?.click()}
             >
               {bedImagePreview ? (
                 <div className="relative w-full h-32">
-                  <Image
-                    src={bedImagePreview}
-                    alt="Bed"
-                    fill
-                    className="object-cover rounded"
-                  />
+                  <Image src={bedImagePreview} alt="Bed" fill className="object-cover rounded" />
                 </div>
               ) : (
                 <>
@@ -151,32 +172,19 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
                 </>
               )}
             </div>
-            <input
-              id="bed-image-input"
-              type="file"
-              accept="image/*"
-              onChange={handleBedUpload}
-              className="hidden"
-            />
+            <input id="bed-image-input" type="file" accept="image/*" onChange={handleBedUpload} className="hidden" />
           </div>
 
-          {/* Product Image Upload */}
+          {/* Product Image */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              2. Upload Product Image
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">2. Upload Product Image</label>
             <div
               className={`drop-zone ${productImagePreview ? "border-primary-500 bg-primary-50" : ""}`}
               onClick={() => document.getElementById("product-image-input")?.click()}
             >
               {productImagePreview ? (
                 <div className="relative w-full h-32">
-                  <Image
-                    src={productImagePreview}
-                    alt="Product"
-                    fill
-                    className="object-contain rounded"
-                  />
+                  <Image src={productImagePreview} alt="Product" fill className="object-contain rounded" />
                 </div>
               ) : (
                 <>
@@ -185,20 +193,12 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
                 </>
               )}
             </div>
-            <input
-              id="product-image-input"
-              type="file"
-              accept="image/*"
-              onChange={handleProductUpload}
-              className="hidden"
-            />
+            <input id="product-image-input" type="file" accept="image/*" onChange={handleProductUpload} className="hidden" />
           </div>
 
           {/* Product Type */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Product Type
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Product Type</label>
             <select
               value={productType}
               onChange={(e) => setProductType(e.target.value)}
@@ -215,96 +215,101 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
 
           {/* Custom Prompt */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Custom Prompt (Optional)
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Custom Prompt (Optional)</label>
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="Describe how you want the product placed..."
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
               rows={3}
             />
           </div>
 
-          {/* Resolution */}
+          {/* Batch Count */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Resolution
-            </label>
-            <div className="flex gap-2">
-              {["1024x1024", "1024x1536", "1536x1024"].map((res) => (
+            <label className="block text-sm font-medium text-gray-700 mb-2">Number of Images (1-20)</label>
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={count}
+              onChange={(e) => setCount(Math.min(20, Math.max(1, parseInt(e.target.value) || 1)))}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+            />
+          </div>
+
+          {/* Aspect Ratio */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Aspect Ratio</label>
+            <div className="flex flex-wrap gap-2">
+              {["1:1", "4:3", "3:4", "16:9", "9:16"].map((ratio) => (
                 <button
-                  key={res}
-                  onClick={() => setResolution(res)}
-                  className={`px-4 py-2 rounded-lg font-medium transition-all ${
-                    resolution === res
-                      ? "bg-primary-500 text-white"
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  key={ratio}
+                  onClick={() => setAspectRatio(ratio)}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium ${
+                    aspectRatio === ratio ? "bg-primary-500 text-white" : "bg-gray-100"
                   }`}
                 >
-                  {res}
+                  {ratio}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Generate Button */}
+          {/* Quality */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Quality</label>
+            <div className="flex gap-2">
+              {["1K", "2K", "4K"].map((q) => (
+                <button
+                  key={q}
+                  onClick={() => setQuality(q)}
+                  className={`px-4 py-2 rounded-lg font-medium ${
+                    quality === q ? "bg-primary-500 text-white" : "bg-gray-100"
+                  }`}
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <button
-            onClick={generateProductOnBed}
+            onClick={generateImages}
             disabled={loading || !bedImage || !productImage}
             className="btn-primary w-full py-3 text-lg"
           >
-            {loading ? (
-              <span className="flex items-center justify-center gap-2">
-                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Generating...
-              </span>
-            ) : (
-              "🛏️ Generate Product on Bed"
-            )}
+            {loading ? "Generating..." : `🛏️ Generate ${count} Image${count > 1 ? "s" : ""}`}
           </button>
-
-          {error && (
-            <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
-              <strong>Error:</strong> {error}
-            </div>
-          )}
         </div>
 
-        {/* Results Section */}
+        {/* Results */}
         <div className="space-y-4">
-          <h3 className="font-semibold text-gray-900">Generated Images</h3>
+          <div className="flex justify-between items-center">
+            <h3 className="font-semibold text-gray-900">Generated ({generatedImages.length})</h3>
+            {generatedImages.length > 0 && (
+              <button onClick={downloadAll} className="btn-secondary text-sm">⬇️ Download All</button>
+            )}
+          </div>
+          
           {generatedImages.length === 0 ? (
             <div className="text-center py-12 text-gray-500">
               <div className="text-4xl mb-2">🖼️</div>
               <p>No images generated yet</p>
-              <p className="text-sm mt-1">Upload a bed and product to get started</p>
             </div>
           ) : (
-            <div className="grid gap-4">
+            <div className="grid grid-cols-2 gap-4 max-h-[600px] overflow-y-auto">
               {generatedImages.map((img) => (
-                <div key={img.id} className="relative border rounded-lg overflow-hidden">
+                <div 
+                  key={img.id} 
+                  className="relative border rounded-lg overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-500"
+                  onClick={() => setSelectedImage(img)}
+                >
                   <div className="relative w-full aspect-video">
-                    <Image
-                      src={img.url}
-                      alt="Generated"
-                      fill
-                      className="object-contain"
-                    />
+                    <Image src={img.url} alt="Generated" fill className="object-cover" />
                   </div>
-                  <div className="p-3 bg-gray-50 border-t">
-                    <p className="text-sm text-gray-600 line-clamp-2">{img.prompt}</p>
-                    <a
-                      href={img.url}
-                      download={`product-bed-${img.id}.png`}
-                      className="mt-2 btn-secondary inline-block text-sm"
-                    >
-                      Download
-                    </a>
+                  <div className="p-2 bg-gray-50 border-t text-xs text-gray-600">
+                    <p className="line-clamp-2">{img.prompt}</p>
                   </div>
                 </div>
               ))}
@@ -312,6 +317,24 @@ export default function ProductOnBedGenerator({ apiKey }: { apiKey: string }) {
           )}
         </div>
       </div>
+
+      {/* Lightbox */}
+      {selectedImage && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={() => setSelectedImage(null)}>
+          <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="relative w-full aspect-video">
+              <Image src={selectedImage.url} alt="Generated" fill className="object-contain" />
+            </div>
+            <div className="p-4 border-t">
+              <p className="text-sm text-gray-700 mb-3"><strong>Prompt:</strong> {selectedImage.prompt}</p>
+              <div className="flex gap-2">
+                <a href={selectedImage.url} download={`product-bed-${selectedImage.id}.png`} className="btn-primary">⬇️ Download</a>
+                <button onClick={() => setSelectedImage(null)} className="btn-secondary">Close</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

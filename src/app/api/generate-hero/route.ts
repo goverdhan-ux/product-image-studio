@@ -22,6 +22,28 @@ function checkRateLimit(identifier: string) {
   return { allowed: true, remaining: RPM - record.count, resetIn: record.resetTime - now };
 }
 
+// Map aspect ratios and quality to dimensions
+function getDimensions(aspectRatio: string, quality: string): { width: number; height: number } {
+  const qualityMap: Record<string, number> = {
+    "1K": 1024,
+    "2K": 2048,
+    "4K": 4096,
+  };
+  
+  const baseSize = qualityMap[quality] || 1024;
+  
+  const ratioMap: Record<string, number[]> = {
+    "1:1": [baseSize, baseSize],
+    "4:3": [baseSize, Math.round(baseSize * 0.75)],
+    "3:4": [Math.round(baseSize * 0.75), baseSize],
+    "16:9": [baseSize, Math.round(baseSize * 9/16)],
+    "9:16": [Math.round(baseSize * 9/16), baseSize],
+  };
+  
+  const [w, h] = ratioMap[aspectRatio] || ratioMap["1:1"];
+  return { width: w, height: h };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const ip = request.headers.get("x-forwarded-for") || "unknown";
@@ -41,7 +63,8 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const imageFile = formData.get("image") as File | null;
     const prompt = formData.get("prompt") as string;
-    const resolution = formData.get("resolution") as string || "1024x1024";
+    const aspectRatio = formData.get("aspectRatio") as string || "1:1";
+    const quality = formData.get("quality") as string || "1K";
     
     // Get API key from env or frontend
     const envApiKey = process.env.GEMINI_API_KEY;
@@ -82,13 +105,8 @@ export async function POST(request: NextRequest) {
     const base64Image = buffer.toString("base64");
     const mimeType = imageFile.type;
 
-    // Map resolution to output dimensions
-    const resolutionMap: Record<string, { width: number; height: number }> = {
-      "1024x1024": { width: 1024, height: 1024 },
-      "1024x1536": { width: 1024, height: 1536 },
-      "1536x1024": { width: 1536, height: 1024 },
-    };
-    const dims = resolutionMap[resolution] || resolutionMap["1024x1024"];
+    // Get dimensions based on aspect ratio and quality
+    const dims = getDimensions(aspectRatio, quality);
 
     // Use REST API directly for image generation
     const response = await fetch(
@@ -143,12 +161,11 @@ export async function POST(request: NextRequest) {
     }
 
     if (!base64Result) {
-      // Check if there's text response
       const textResponse = data.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("") || "";
       return NextResponse.json(
         { 
           error: "NO_IMAGE_IN_RESPONSE", 
-          message: "The model returned text instead of an image. Model may not support image generation with this prompt.",
+          message: "The model returned text instead of an image.",
           debug: textResponse.slice(0, 500)
         },
         { status: 500 }
@@ -157,6 +174,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       imageUrl: `data:image/png;base64,${base64Result}`,
+      usedPrompt: `${prompt}. High quality, professional product photography, 4k, detailed.`,
       rateLimit: { remaining: rateLimit.remaining, resetIn: rateLimit.resetIn }
     });
 

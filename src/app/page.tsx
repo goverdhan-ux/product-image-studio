@@ -3,11 +3,11 @@
 import { useState } from "react";
 import HeroImageGenerator from "@/components/HeroImageGenerator";
 import ProductOnBedGenerator from "@/components/ProductOnBedGenerator";
-import MultiAngleGenerator from "@/components/MultiAngleGenerator";
+import CameraAnglesGenerator from "@/components/CameraAnglesGenerator";
 import AIPromptAssistant from "@/components/AIPromptAssistant";
 import SettingsPanel from "@/components/SettingsPanel";
 
-type TabId = "hero" | "product-bed" | "multi-angle" | "ai-prompt" | "settings";
+type TabId = "hero" | "product-bed" | "camera-angles" | "ai-prompt" | "settings";
 
 interface Tab {
   id: TabId;
@@ -18,7 +18,7 @@ interface Tab {
 const tabs: Tab[] = [
   { id: "hero", name: "Hero Image", icon: "📸" },
   { id: "product-bed", name: "Product on Bed", icon: "🛏️" },
-  { id: "multi-angle", name: "Multi-Angle", icon: "🎬" },
+  { id: "camera-angles", name: "Camera Angles", icon: "📷" },
   { id: "ai-prompt", name: "AI Prompt", icon: "🤖" },
   { id: "settings", name: "Settings", icon: "⚙️" },
 ];
@@ -34,8 +34,8 @@ export default function Home() {
         return <HeroImageGenerator apiKey={apiKey} />;
       case "product-bed":
         return <ProductOnBedGenerator apiKey={apiKey} />;
-      case "multi-angle":
-        return <MultiAngleGenerator apiKey={apiKey} />;
+      case "camera-angles":
+        return <CameraAnglesGenerator apiKey={apiKey} />;
       case "ai-prompt":
         return <AIPromptAssistant apiKey={openAIKey} />;
       case "settings":
